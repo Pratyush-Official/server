@@ -1,0 +1,13 @@
+pid_server_node:
+  ros__parameters:
+    pid.vx.kp: 0.08
+    pid.vx.ki: 0.0
+    pid.vx.kd: 0.0
+
+    pid.vy.kp: 0.0
+    pid.vy.ki: 0.0
+    pid.vy.kd: 0.0
+
+    pid.w.kp:  0.0
+    pid.w.ki:  0.0
+    pid.w.kd:  0.0
