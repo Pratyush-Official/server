@@ -11,16 +11,18 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 
 #include "std_msgs/msg/float32_multi_array.hpp"
+#include "std_msgs/msg/int32_multi_array.hpp"
+
 #include "geometry_msgs/msg/twist.hpp"
 
 #include "ar_interfaces/action/movement.hpp"
 #include "robotlibpc/cpp/controller/pid.hpp"
 
-class PIDServerNode : public rclcpp::Node
+class OdomPIDServer : public rclcpp::Node
 {
 public:
 
-    PIDServerNode();
+    OdomPIDServer();
     using Movement = ar_interfaces::action::Movement;
     using GoalHandleMovement = rclcpp_action::ServerGoalHandle<Movement>;
 
@@ -28,7 +30,7 @@ private:
     // ---------------- ROS interfaces ----------------
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
     rclcpp_action::Server<Movement>::SharedPtr action_server_;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sick_sub_;
+    rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr odom_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr slider_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr graph_pub_;
@@ -52,18 +54,19 @@ private:
     double vy_kp, vy_ki, vy_kd;
     double w_kp,  w_ki,  w_kd;
 
-    // SICK DATA 
-    std::vector<float> sick_vals_{0.0f, 0.0f, 0.0f, 0.0f}; // FL, FR, L, R
-    bool sick_ready_{false};
+    // ODOM DATA 
+    std::vector<float> odom_vals_{0.0f, 0.0f}; // FL, FR, L, R
+    bool odom_ready_{false};
 
     // ---------------- CLIENT SETPOINTS ----------------
     std::vector<float> true_goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
-    std::vector<float> goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<int32_t> data{0, 0};
+
     std::vector<float> slider_data_{0.0f, 0.0f, 0.0f, 0.0f}; // default
     bool goal_active_{false};
 
     // ---------------- Callbacks ----------------
-    void sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
+    void odomCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
     void pidLoop();
     void sliderCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
     void trajectory_tracking();

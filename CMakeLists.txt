@@ -18,9 +18,14 @@ include_directories(
 )
 
 # Add executable for PID server node
-add_executable(pid_server_node
-  src/servers/martial_pid.cpp
+add_executable(sick_server_node
+  src/servers/sick_pid.cpp
   include/robotlibpc/cpp/controller/pid.cpp 
+)
+
+add_executable(odom_server_node
+  src/servers/odom_pid.cpp
+  include/robotlibpc/cpp/controller/pid.cpp
 )
 
 add_executable(align_server_node
@@ -32,7 +37,15 @@ add_executable(test_yaw_node
   src/TestingClient/test_yaw.cpp        # your ROS 2 node file # if your node uses PID helper code
 )
 
-ament_target_dependencies(pid_server_node
+ament_target_dependencies(odom_server_node
+  rclcpp
+  rclcpp_action
+  std_msgs
+  ar_interfaces
+  geometry_msgs
+)
+
+ament_target_dependencies(sick_server_node
   rclcpp
   rclcpp_action
   std_msgs
@@ -54,7 +67,8 @@ ament_target_dependencies(test_yaw_node
 )
 
 install(TARGETS
-  pid_server_node
+  sick_server_node
+  odom_server_node
   align_server_node
   test_yaw_node
   DESTINATION lib/${PROJECT_NAME}
