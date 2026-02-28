@@ -51,8 +51,8 @@ SickPIDServer::SickPIDServer()
         pid_vy_->setTunings(0.009000f, 0.0f, 0.0f);
         RCLCPP_INFO(this->get_logger(), "Sick PID Server started");
 
-        pid_vx_->init();
-        pid_vy_->init();
+        pid_vx_->init(); //This resets a timer
+        pid_vy_->init(); //This resets a timer
     }
 
     // ---------------- CALLBACKS ----------------
@@ -62,6 +62,7 @@ void SickPIDServer::sickCallback(const std_msgs::msg::Float32MultiArray::SharedP
     if (msg->data.size() >= 4) {
         sick_vals_ = msg->data;
         sick_ready_ = true;
+        
     }
 }
 
@@ -69,9 +70,11 @@ void SickPIDServer::sliderCallback(const std_msgs::msg::Float32MultiArray::Share
 {
     if (msg->data.size() >= 4) {
         slider_data_ = msg->data;
-        printf("Slider data: ");
+        printf("Slider data obtained: ");
         printf("%.3f ", slider_data_[0]);
         printf("\n");
+
+
     }
 }
 
