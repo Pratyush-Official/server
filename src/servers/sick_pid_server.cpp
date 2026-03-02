@@ -85,8 +85,6 @@ void SickPIDServer::sliderCallback(const std_msgs::msg::Float32MultiArray::Share
         printf("Slider data obtained: ");
         printf("%.3f ", slider_data_[0]);
         printf("\n");
-
-
     }
 }
 
@@ -94,7 +92,6 @@ void SickPIDServer::pidLoop()
 {
     RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
     // if (!pid_vx_) return;
-
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         if (!sick_ready_ || !goal_active_ || true_goal_sp_.size() < 4) return;
@@ -111,7 +108,6 @@ void SickPIDServer::pidLoop()
     pid_vx_->input = FL;
     pid_vy_->input = L;
 
-
     pid_vx_->setpoint = sp_FL;
     pid_vy_->setpoint = sp_L;
 
@@ -127,26 +123,10 @@ void SickPIDServer::pidLoop()
     graph_out.data.push_back(pid_vx_->setpoint);
     graph_out.data.push_back(pid_vx_->output);
     // graph_out.data.push_back(pid_vy_->input);
-    
     // graph_out.data.push_back(pid_vy_->setpoint);
 
-
-    if (std::fabs(error_vx) < 0.5f && std::fabs(error_vy) < 0.5f) {
-        resetVel();
-        pid_vx_->reset();
-        pid_vy_->reset();
-        
-    }
-
-    else{    
-        cmd.linear.x  = -(pid_vx_->output);
-        cmd.linear.y  = (pid_vy_->output);
-    }
-
-    //cmd.angular.z = (pid_w_->output);
-
-    // RCLCPP_INFO(this->get_logger(),
-    //              "PID Outputs x: %.2f, y: %.2f", cmd.linear.x, cmd.linear.y);
+    cmd.linear.x  = -(pid_vx_->output);
+    cmd.linear.y  = (pid_vy_->output);
                  
     graph_pub_->publish(graph_out);
     cmd_pub_->publish(cmd);
@@ -163,8 +143,6 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
         RCLCPP_WARN(this->get_logger(), "PID busy, rejecting new goal");
 
         resetVel();
-        pid_vx_->reset();
-        pid_vy_->reset();
         return rclcpp_action::GoalResponse::REJECT;
     }
 
@@ -175,45 +153,15 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
         }
         goal_active_ = true;
         // RCLCPP_INFO(this->get_logger(), "PID goal received and setpoints updated to : %.2f, %.2f, %.2f, %.2f", true_goal_sp_[0], true_goal_sp_[1], true_goal_sp_[2], true_goal_sp_[3]);
-        resetVel();
-        pid_vx_->reset();
-        pid_vy_->reset();
-        
-
+        resetVel();    
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     } else {
         RCLCPP_WARN(this->get_logger(), "PID goal rejected: setpoint_sick has less than 4 elements");
 
-        pid_vx_->reset();
-        pid_vy_->reset();
+        resetVel();
         return rclcpp_action::GoalResponse::REJECT;
     }
 }
-
-// void SickPIDServer::trajectory_tracking(){
-
-//      float step = 1.0f;
-//      float error_to_goal = 0.0f;
-//      if (goal_active_ && sick_ready_) {
-//          if(fabs(true_goal_sp_[0] - sick_vals_[0]) < 5.0f &&
-//             fabs(true_goal_sp_[1] - sick_vals_[1]) < 5.0f &&
-//             fabs(true_goal_sp_[2] - sick_vals_[2]) < 5.0f &&
-//             fabs(true_goal_sp_[3] - sick_vals_[3]) < 5.0f)
-//          {
-//              for(int i = 0; i < 4; i++){
-//                  goal_sp_[i] = true_goal_sp_[i];
-//                  printf("Final setpoint given\n");
-//              }
-//          }
-//          else{
-//              for(int i = 0; i < 4; i++){
-//                  error_to_goal = true_goal_sp_[i] - sick_vals_[i];
-//                  goal_sp_[i] += std::copysign(std::fmin(step, fabs(error_to_goal)), error_to_goal) ; // move closer each loop
-//                  printf("Intermediate setpoint given\n");
-//              }
-//          }
-//      }
-//  }
 
 rclcpp_action::CancelResponse SickPIDServer::handle_cancel(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
@@ -221,8 +169,6 @@ rclcpp_action::CancelResponse SickPIDServer::handle_cancel(const std::shared_ptr
     RCLCPP_WARN(this->get_logger(), "PID goal canceled");
 
     resetVel(); // Stop the robot immediately on cancel
-    pid_vx_->reset();
-    pid_vy_->reset();
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -230,8 +176,6 @@ void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> go
 {
     RCLCPP_INFO(this->get_logger(), "Starting PID goal execution"); 
     resetVel(); // Ensure robot is stopped at start of new goal
-
-    resetVel();
     pid_vx_->reset();
     pid_vy_->reset();
 
@@ -240,6 +184,7 @@ void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> go
 
 void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
+    int settle_count = 0;
     auto result = std::make_shared<Movement::Result>();
     geometry_msgs::msg::Twist cmd;
     rclcpp::Rate rate(25); // 10ms loop
@@ -248,7 +193,6 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
     float error_vx;
     float error_vy;
     while (rclcpp::ok() && goal_active_ && sick_ready_) {
-        pidLoop();
         // Compute errors
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
@@ -256,35 +200,24 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
             error_vy = true_goal_sp_[1] - sick_vals_[1];
         }
 
-        // Debug print every loop iteration
-        // RCLCPP_INFO(this->get_logger(),
-        //             "PID Loop: sick_vals=[%.2f, %.2f], goal_sp=[%.2f, %.2f], error=[%.2f, %.2f],",
-        //             sick_vals_[0], sick_vals_[1],
-        //             true_goal_sp_[0], true_goal_sp_[1],
-        //             error_vx, error_vy);
-
-        // Check if goal is reached
         if (std::fabs(error_vx) < 0.5f && std::fabs(error_vy) < 0.5f) {
-            goal_active_ = false;
-            RCLCPP_INFO(this->get_logger(),
-                        "PID goal reached! Final Values: sick_vals=[%.2f, %.2f], goal_sp=[%.2f, %.2f], error=[%.2f, %.2f],",
-                        sick_vals_[0], sick_vals_[1],
-                        true_goal_sp_[0], true_goal_sp_[1],
-                        error_vx, error_vy);
-
-            resetVel();
-            pid_vx_->reset();
-            pid_vy_->reset();
-
-            // Stop the robot
-            
-            break; // Exit loop
+            resetVel(); //Holding zero waiting for settle to be done
+            settle_count++;
+            if(settle_count >=5)
+            {
+                goal_active_ = false;
+                resetVel();
+                // pid_vx_->reset();
+                // pid_vy_->reset();
+                break; // Exit loop
+            }
         }
-
-        // rate.sleep();
+        else{
+            settle_count = 0;
+            pidLoop(); //Only run pid loop when not settled
         }
-
-    goal_active_ = false;
+        rate.sleep();
+        }
 
     goal_handle->succeed(result);
     RCLCPP_INFO(this->get_logger(), "PID goal reached");
