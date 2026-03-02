@@ -12,7 +12,7 @@ AlignServerNode::AlignServerNode()
             this->get_parameter("pid.w.kp").as_double(),
             this->get_parameter("pid.w.ki").as_double(),
             this->get_parameter("pid.w.kd").as_double(),
-            -1.0f, 1.0f, 10, PROPORTIONAL_ON_ERROR, DIRECT, AUTOMATIC);
+            -1.0f, 1.0f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", 10,

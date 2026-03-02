@@ -17,14 +17,14 @@ SickPIDServer::SickPIDServer()
             this->get_parameter("pid.vx.kp").as_double(),
             this->get_parameter("pid.vx.ki").as_double(),
             this->get_parameter("pid.vx.kd").as_double(),
-            -0.7f, 0.7f, 10, PROPORTIONAL_ON_ERROR, DIRECT, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
         
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("pid.vy.kp").as_double(),
             this->get_parameter("pid.vy.ki").as_double(),
             this->get_parameter("pid.vy.kd").as_double(),
-            -0.7f, 0.7f, 10, PROPORTIONAL_ON_ERROR, DIRECT, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", sensor_qos(),
@@ -33,7 +33,7 @@ SickPIDServer::SickPIDServer()
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
 
-        graph_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/pid_tune", 10);
+        graph_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/sick_error", sensor_qos());
 
         // slider_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
         //     "/pid_gains", 10,
@@ -54,6 +54,18 @@ SickPIDServer::SickPIDServer()
         pid_vx_->init(); //This resets a timer
         pid_vy_->init(); //This resets a timer
     }
+
+SickPIDServer::~SickPIDServer() {
+    RCLCPP_INFO(this->get_logger(), "Shutting down SickPIDServer");
+    goal_active_ = false; // stop any running PID loops
+    geometry_msgs::msg::Twist cmd;
+    cmd.linear.x = 0.0;
+    cmd.linear.y = 0.0;
+    cmd_pub_->publish(cmd);
+    
+    pid_vx_->reset();
+    pid_vy_->reset();
+}
 
     // ---------------- CALLBACKS ----------------
 void SickPIDServer::sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
@@ -99,9 +111,15 @@ void SickPIDServer::pidLoop()
     pid_vx_->input = FL;
     pid_vy_->input = L;
 
+
     pid_vx_->setpoint = sp_FL;
     pid_vy_->setpoint = sp_L;
 
+    pid_vx_->kd_ = 0.0f;         // brute force
+    pid_vx_->kdScaled_ = 0.0f;
+    pid_vy_->kd_ = 0.0f;
+    pid_vy_->kdScaled_ = 0.0f;
+    
     pid_vx_->compute();
     pid_vy_->compute();
 
@@ -111,13 +129,18 @@ void SickPIDServer::pidLoop()
 
     graph_out.data.clear();
     graph_out.data.push_back(pid_vx_->input);
-    graph_out.data.push_back(pid_vy_->input);
     graph_out.data.push_back(pid_vx_->setpoint);
-    graph_out.data.push_back(pid_vy_->setpoint);
+    graph_out.data.push_back(pid_vx_->output);
+    // graph_out.data.push_back(pid_vy_->input);
+    
+    // graph_out.data.push_back(pid_vy_->setpoint);
 
-    if (std::fabs(error_vx) < 0.2f && std::fabs(error_vy) < 0.2f) {
-        cmd.linear.x = 0;
-        cmd.linear.y = 0;
+
+    if (std::fabs(error_vx) < 0.5f && std::fabs(error_vy) < 0.5f) {
+        resetVel();
+        pid_vx_->reset();
+        pid_vy_->reset();
+        
     }
 
     else{    
@@ -130,7 +153,7 @@ void SickPIDServer::pidLoop()
     // RCLCPP_INFO(this->get_logger(),
     //              "PID Outputs x: %.2f, y: %.2f", cmd.linear.x, cmd.linear.y);
                  
-    // graph_pub_->publish(graph_out);
+    graph_pub_->publish(graph_out);
     cmd_pub_->publish(cmd);
 }
 
@@ -143,6 +166,8 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
 
     if (goal_active_) {
         RCLCPP_WARN(this->get_logger(), "PID busy, rejecting new goal");
+
+        resetVel();
         pid_vx_->reset();
         pid_vy_->reset();
         return rclcpp_action::GoalResponse::REJECT;
@@ -155,8 +180,10 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
         }
         goal_active_ = true;
         // RCLCPP_INFO(this->get_logger(), "PID goal received and setpoints updated to : %.2f, %.2f, %.2f, %.2f", true_goal_sp_[0], true_goal_sp_[1], true_goal_sp_[2], true_goal_sp_[3]);
+        resetVel();
         pid_vx_->reset();
         pid_vy_->reset();
+        
 
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     } else {
@@ -198,6 +225,7 @@ rclcpp_action::CancelResponse SickPIDServer::handle_cancel(const std::shared_ptr
     goal_active_ = false;
     RCLCPP_WARN(this->get_logger(), "PID goal canceled");
 
+    resetVel(); // Stop the robot immediately on cancel
     pid_vx_->reset();
     pid_vy_->reset();
     return rclcpp_action::CancelResponse::ACCEPT;
@@ -206,6 +234,9 @@ rclcpp_action::CancelResponse SickPIDServer::handle_cancel(const std::shared_ptr
 void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
     RCLCPP_INFO(this->get_logger(), "Starting PID goal execution"); 
+    resetVel(); // Ensure robot is stopped at start of new goal
+
+    resetVel();
     pid_vx_->reset();
     pid_vy_->reset();
 
@@ -216,7 +247,7 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
 {
     auto result = std::make_shared<Movement::Result>();
     geometry_msgs::msg::Twist cmd;
-    rclcpp::Rate rate(100); // 10ms loop
+    rclcpp::Rate rate(25); // 10ms loop
     //const float tol = 0.5f;
 
     float error_vx;
@@ -239,30 +270,37 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
 
         // Check if goal is reached
         if (std::fabs(error_vx) < 0.5f && std::fabs(error_vy) < 0.5f) {
+            goal_active_ = false;
             RCLCPP_INFO(this->get_logger(),
                         "PID goal reached! Final Values: sick_vals=[%.2f, %.2f], goal_sp=[%.2f, %.2f], error=[%.2f, %.2f],",
                         sick_vals_[0], sick_vals_[1],
                         true_goal_sp_[0], true_goal_sp_[1],
                         error_vx, error_vy);
 
+            resetVel();
             pid_vx_->reset();
             pid_vy_->reset();
 
             // Stop the robot
-            cmd.linear.x = 0.0f;
-            cmd.linear.y = 0.0f;
-            cmd_pub_->publish(cmd);
-
+            
             break; // Exit loop
         }
 
-        rate.sleep();
+        // rate.sleep();
         }
 
     goal_active_ = false;
 
     goal_handle->succeed(result);
     RCLCPP_INFO(this->get_logger(), "PID goal reached");
+}
+
+void SickPIDServer::resetVel()
+{
+    geometry_msgs::msg::Twist cmd;
+    cmd.linear.x = 0.0f;
+    cmd.linear.y = 0.0f;
+    cmd_pub_->publish(cmd);
 }
 
 // ---------------- MAIN ----------------

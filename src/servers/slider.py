@@ -302,14 +302,15 @@
 #     main()
 
 #!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 import threading
 import time
 from collections import deque
+import numpy as np
 
 import tkinter as tk
 from tkinter import ttk
@@ -319,103 +320,101 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-
-# ================= CONFIG =================
-WINDOW_SEC = 5.0
+WINDOW_SEC = 10.0
 SAMPLE_PERIOD = 0.01
-SLIDER_MIN = 0.0
-SLIDER_MAX = 100.0
-# ==========================================
+AVERAGE_COUNT = 10  # moving average
 
-
-# ================= ROS NODE =================
-class MultiArrayPlotNode(Node):
-
+class TriplePlotNode(Node):
     def __init__(self):
-        super().__init__('multiarray_plot_gui')
+        super().__init__('triple_plot_gui')
 
-        self.create_subscription(
-            Float32MultiArray,
-            'sick_data',   # change topic if needed
-            self.callback,
-            10
-        )
+        qos_profile = QoSProfile(depth=10)
+        qos_profile.reliability = QoSReliabilityPolicy.BEST_EFFORT
+        qos_profile.durability = QoSDurabilityPolicy.VOLATILE
+
+        self.sub = self.create_subscription(Float32MultiArray, 'sick_error', self.callback, qos_profile)
 
         self.start_time = time.time()
         self.max_len = int(WINDOW_SEC / SAMPLE_PERIOD)
 
+        # Buffers for moving average for each index
+        self.buf = [deque(maxlen=AVERAGE_COUNT) for _ in range(3)]
+
+        # Data for plotting
         self.t = deque(maxlen=self.max_len)
-        self.data = deque(maxlen=self.max_len)
+        self.data = [deque(maxlen=self.max_len) for _ in range(3)]
 
     def callback(self, msg):
-        if len(msg.data) == 0:
+        if len(msg.data) < 3:
             return
 
-        now = time.time() - self.start_time
+        # append to buffers
+        for i in range(3):
+            self.buf[i].append(msg.data[i])
 
-        self.t.append(now)
-        self.data.append(msg.data[0])   # ✅ ONLY 0th index
+        # if all buffers are full, compute average and append to data
+        if all(len(b) == AVERAGE_COUNT for b in self.buf):
+            now = time.time() - self.start_time
+            self.t.append(now)
+            for i in range(3):
+                avg = np.mean(self.buf[i])
+                self.data[i].append(avg)
 
-
-# ================= GUI =================
-class MultiArrayPlotGUI:
-
-    def __init__(self, node: MultiArrayPlotNode):
+class TriplePlotGUI:
+    def __init__(self, node: TriplePlotNode):
         self.node = node
-
         self.root = tk.Tk()
-        self.root.title("Float32MultiArray Plot (Index 0)")
-        self.root.geometry("1100x700")
+        self.root.title("Triple Index Plot")
+        self.root.geometry("1000x700")
 
-        self._build_controls()
         self._build_plot()
-
         self.update_plot()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ---------- USELESS SLIDER ----------
-    def _build_controls(self):
-        frame = ttk.Frame(self.root)
-        frame.pack(fill="x", padx=20, pady=10)
-
-        ttk.Label(frame, text="Completely Useless Slider",
-                  font=("Arial", 14)).pack(anchor="w")
-
-        self.slider = ttk.Scale(
-            frame,
-            from_=SLIDER_MIN,
-            to=SLIDER_MAX,
-            orient="horizontal"
-        )
-        self.slider.pack(fill="x", pady=5)
-
-        self.slider.set(50.0)
-        self.slider.bind("<Enter>", lambda e: self.slider.focus_set())
-
-    # ---------- PLOT ----------
     def _build_plot(self):
         frame = ttk.Frame(self.root)
         frame.pack(fill="both", expand=True)
 
-        self.fig = Figure(figsize=(7, 5))
-        self.ax = self.fig.add_subplot(111)
+        self.fig = Figure(figsize=(10, 6))
+        self.axes = []
+        self.lines = []
 
-        self.line, = self.ax.plot([], [], label="Index 0")
+        colors = ["blue", "green", "red"]
+        labels = ["Index 0", "Index 1", "Index 2"]
 
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Value")
-        self.ax.grid(True)
-        self.ax.legend()
+        for i in range(3):
+            ax = self.fig.add_subplot(3, 1, i+1, sharex=self.axes[0] if i > 0 else None)
+            line, = ax.plot([], [], label=labels[i], color=colors[i])
+            ax.set_ylabel("Value")
+            ax.grid(True)
+            ax.legend()
+            self.axes.append(ax)
+            self.lines.append(line)
+
+        self.axes[-1].set_xlabel("Time (s)")
 
         self.canvas = FigureCanvasTkAgg(self.fig, frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def update_plot(self):
         if self.node.t:
-            self.line.set_data(self.node.t, self.node.data)
+            x = list(self.node.t)
+            # find min length of data to sync
+            min_len = min(len(d) for d in self.node.data)
+            x = x[-min_len:]
+            ys = [list(d)[-min_len:] for d in self.node.data]
 
-            self.ax.relim()
-            self.ax.autoscale()
+            # update lines
+            for i in range(3):
+                self.lines[i].set_data(x, ys[i])
+
+            # synchronized y-limits
+            combined_y = sum(ys, [])  # flatten all three
+            y_min, y_max = min(combined_y), max(combined_y)
+            pad = (y_max - y_min) * 0.05 if y_max != y_min else 1.0
+            for ax in self.axes:
+                ax.set_xlim(x[0], x[-1])
+                ax.set_ylim(y_min - pad, y_max + pad)
 
             self.canvas.draw_idle()
 
@@ -425,18 +424,13 @@ class MultiArrayPlotGUI:
         self.root.quit()
         self.root.destroy()
 
-
-# ================= MAIN =================
 def main():
     rclpy.init()
-    node = MultiArrayPlotNode()
-
+    node = TriplePlotNode()
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
-    MultiArrayPlotGUI(node).root.mainloop()
-
+    TriplePlotGUI(node).root.mainloop()
     node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

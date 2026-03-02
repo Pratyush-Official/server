@@ -21,14 +21,14 @@ OdomPIDServer::OdomPIDServer()
             this->get_parameter("odom.vx.kp").as_double(),
             this->get_parameter("odom.vx.ki").as_double(),
             this->get_parameter("odom.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, PROPORTIONAL_ON_ERROR, DIRECT, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
         
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("odom.vy.kp").as_double(),
             this->get_parameter("odom.vy.ki").as_double(),
             this->get_parameter("odom.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, PROPORTIONAL_ON_ERROR, DIRECT, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
 
