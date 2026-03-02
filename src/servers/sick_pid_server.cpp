@@ -1,4 +1,4 @@
-#include "servers/sick_pid.hpp"
+#include "servers/sick_pid_server.hpp"
 #include "qos_profiles.hpp"
 
 SickPIDServer::SickPIDServer()
@@ -115,11 +115,6 @@ void SickPIDServer::pidLoop()
     pid_vx_->setpoint = sp_FL;
     pid_vy_->setpoint = sp_L;
 
-    pid_vx_->kd_ = 0.0f;         // brute force
-    pid_vx_->kdScaled_ = 0.0f;
-    pid_vy_->kd_ = 0.0f;
-    pid_vy_->kdScaled_ = 0.0f;
-    
     pid_vx_->compute();
     pid_vy_->compute();
 

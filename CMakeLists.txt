@@ -19,12 +19,12 @@ include_directories(
 
 # Add executable for PID server node
 add_executable(sick_server_node
-  src/servers/sick_pid.cpp
+  src/servers/sick_pid_server.cpp
   include/robotlibpc/cpp/controller/pid.cpp 
 )
 
 add_executable(odom_server_node
-  src/servers/odom_pid.cpp
+  src/servers/odom_pid_server.cpp
   include/robotlibpc/cpp/controller/pid.cpp
 )
 
