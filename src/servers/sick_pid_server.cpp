@@ -17,14 +17,14 @@ SickPIDServer::SickPIDServer()
             this->get_parameter("pid.vx.kp").as_double(),
             this->get_parameter("pid.vx.ki").as_double(),
             this->get_parameter("pid.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.2f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
         
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("pid.vy.kp").as_double(),
             this->get_parameter("pid.vy.ki").as_double(),
             this->get_parameter("pid.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.2f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", sensor_qos(),
@@ -187,44 +187,24 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
     int settle_count = 0;
     auto result = std::make_shared<Movement::Result>();
     geometry_msgs::msg::Twist cmd;
-    rclcpp::Rate rate(25); // 10ms loop
-    //const float tol = 0.5f;
+    rclcpp::Rate rate(100); // 10ms loop
 
-    float error_vx;
-    float error_vy;
     while (rclcpp::ok() && goal_active_ && sick_ready_) {
-        // Compute errors
-        {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            error_vx = true_goal_sp_[0] - sick_vals_[0];
-            error_vy = true_goal_sp_[1] - sick_vals_[1];
-        }
+        pidLoop();
 
-        if (std::fabs(error_vx) < 0.2f && std::fabs(error_vy) < 0.2f) {
-            resetVel();
-            settle_count++;
-            pid_vx_->reset();
-            pid_vy_->reset();
-
-            if(settle_count >= 5) {
+        if (pid_vx_->is_allowable_error && pid_vy_->is_allowable_error)  {
                 goal_active_ = false;
                 resetVel();
                 pid_vx_->reset();
                 pid_vy_->reset();
                 break;
             }
+            rate.sleep();
         }
-        else{
-            settle_count = 0;
-            pidLoop(); //Only run pid loop when not settled
-        }
-        rate.sleep();
-        }
-
+        
     goal_handle->succeed(result);
     RCLCPP_INFO(this->get_logger(), "PID goal reached");
 }
-
 void SickPIDServer::resetVel()
 {
     geometry_msgs::msg::Twist cmd;
