@@ -90,6 +90,8 @@ void SickPIDServer::sliderCallback(const std_msgs::msg::Float32MultiArray::Share
 
 void SickPIDServer::pidLoop()
 {
+    geometry_msgs::msg::Twist cmd;
+    std_msgs::msg::Float32MultiArray graph_out;
     RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
     // if (!pid_vx_) return;
     {
@@ -113,10 +115,11 @@ void SickPIDServer::pidLoop()
 
     pid_vx_->compute();
     pid_vy_->compute();
+    
+    cmd.linear.x  = -(pid_vx_->output);
+    cmd.linear.y  = (pid_vy_->output);
 
     RCLCPP_INFO(this->get_logger(), "PID input x: %.2f", FL);
-    geometry_msgs::msg::Twist cmd;
-    std_msgs::msg::Float32MultiArray graph_out;
 
     graph_out.data.clear();
     graph_out.data.push_back(pid_vx_->input);
@@ -124,9 +127,6 @@ void SickPIDServer::pidLoop()
     graph_out.data.push_back(pid_vx_->output);
     // graph_out.data.push_back(pid_vy_->input);
     // graph_out.data.push_back(pid_vy_->setpoint);
-
-    cmd.linear.x  = -(pid_vx_->output);
-    cmd.linear.y  = (pid_vy_->output);
                  
     graph_pub_->publish(graph_out);
     cmd_pub_->publish(cmd);
@@ -200,16 +200,18 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
             error_vy = true_goal_sp_[1] - sick_vals_[1];
         }
 
-        if (std::fabs(error_vx) < 0.5f && std::fabs(error_vy) < 0.5f) {
-            resetVel(); //Holding zero waiting for settle to be done
+        if (std::fabs(error_vx) < 0.2f && std::fabs(error_vy) < 0.2f) {
+            resetVel();
             settle_count++;
-            if(settle_count >=5)
-            {
+            pid_vx_->reset();
+            pid_vy_->reset();
+
+            if(settle_count >= 5) {
                 goal_active_ = false;
                 resetVel();
-                // pid_vx_->reset();
-                // pid_vy_->reset();
-                break; // Exit loop
+                pid_vx_->reset();
+                pid_vy_->reset();
+                break;
             }
         }
         else{
