@@ -34,7 +34,12 @@ add_executable(align_server_node
 )
 
 add_executable(test_yaw_node
-  src/TestingClient/test_yaw.cpp        # your ROS 2 node file # if your node uses PID helper code
+  src/TestingCodes/test_yaw.cpp       
+)
+
+add_executable(yaw_server_node
+  src/servers/yaw_pid_server.cpp
+  include/robotlibpc/cpp/controller/pid.cpp
 )
 
 ament_target_dependencies(odom_server_node
@@ -66,11 +71,20 @@ ament_target_dependencies(test_yaw_node
   std_msgs
 )
 
+ament_target_dependencies(yaw_server_node
+  rclcpp
+  rclcpp_action
+  std_msgs
+  ar_interfaces
+  geometry_msgs
+)
+
 install(TARGETS
   sick_server_node
   odom_server_node
   align_server_node
   test_yaw_node
+  yaw_server_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -17,14 +17,14 @@ SickPIDServer::SickPIDServer()
             this->get_parameter("pid.vx.kp").as_double(),
             this->get_parameter("pid.vx.ki").as_double(),
             this->get_parameter("pid.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.2f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
         
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("pid.vy.kp").as_double(),
             this->get_parameter("pid.vy.ki").as_double(),
             this->get_parameter("pid.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.2f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", sensor_qos(),
@@ -55,17 +55,7 @@ SickPIDServer::SickPIDServer()
         pid_vy_->init(); //This resets a timer
     }
 
-SickPIDServer::~SickPIDServer() {
-    RCLCPP_INFO(this->get_logger(), "Shutting down SickPIDServer");
-    goal_active_ = false; // stop any running PID loops
-    geometry_msgs::msg::Twist cmd;
-    cmd.linear.x = 0.0;
-    cmd.linear.y = 0.0;
-    cmd_pub_->publish(cmd);
-    
-    pid_vx_->reset();
-    pid_vy_->reset();
-}
+
 
     // ---------------- CALLBACKS ----------------
 void SickPIDServer::sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
@@ -119,7 +109,7 @@ void SickPIDServer::pidLoop()
     cmd.linear.x  = -(pid_vx_->output);
     cmd.linear.y  = (pid_vy_->output);
 
-    RCLCPP_INFO(this->get_logger(), "PID input x: %.2f", FL);
+    // RCLCPP_INFO(this->get_logger(), "PID input x: %.2f", FL);
 
     graph_out.data.clear();
     graph_out.data.push_back(pid_vx_->input);
@@ -128,7 +118,7 @@ void SickPIDServer::pidLoop()
     // graph_out.data.push_back(pid_vy_->input);
     // graph_out.data.push_back(pid_vy_->setpoint);
                  
-    graph_pub_->publish(graph_out);
+    // graph_pub_->publish(graph_out);
     cmd_pub_->publish(cmd);
 }
 
@@ -176,31 +166,44 @@ void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> go
 {
     RCLCPP_INFO(this->get_logger(), "Starting PID goal execution"); 
     resetVel(); // Ensure robot is stopped at start of new goal
-    pid_vx_->reset();
-    pid_vy_->reset();
+    // pid_vx_->reset();
+    // pid_vy_->reset();
+
+    // pid_vx_->setMode(AUTOMATIC); 
+    // pid_vy_->setMode(AUTOMATIC);
 
     std::thread([this, goal_handle]() { execute(goal_handle); }).detach();
 }
 
 void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
-    int settle_count = 0;
     auto result = std::make_shared<Movement::Result>();
     geometry_msgs::msg::Twist cmd;
     rclcpp::Rate rate(100); // 10ms loop
 
     while (rclcpp::ok() && goal_active_ && sick_ready_) {
-        pidLoop();
+        
+        // RCLCPP_INFO(this->get_logger(), "Loop is running with error_vx: %.3f, error_vy: %.3f", error_vx, error_vy);
 
         if (pid_vx_->is_allowable_error && pid_vy_->is_allowable_error)  {
                 goal_active_ = false;
+
+                // pid_vx_->setMode(MANUAL); 
+                // pid_vy_->setMode(MANUAL);
+
+                RCLCPP_INFO(this->get_logger(), "PID goal reached");
+
                 resetVel();
                 pid_vx_->reset();
                 pid_vy_->reset();
                 break;
             }
-            rate.sleep();
+
+        else{
+            pidLoop();
         }
+        rate.sleep();
+    }
         
     goal_handle->succeed(result);
     RCLCPP_INFO(this->get_logger(), "PID goal reached");

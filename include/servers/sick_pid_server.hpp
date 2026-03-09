@@ -21,7 +21,6 @@ class SickPIDServer : public rclcpp::Node
 public:
 
     SickPIDServer();
-    ~SickPIDServer();
     using Movement = ar_interfaces::action::Movement;
     using GoalHandleMovement = rclcpp_action::ServerGoalHandle<Movement>;
 
@@ -73,7 +72,7 @@ private:
     void sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
     void pidLoop();
     void sliderCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-    void trajectory_tracking();
+    // void trajectory_tracking();
     void resetVel();
 
     // ---------------- Action server handlers ----------------
