@@ -5,15 +5,15 @@ YawPIDServer::YawPIDServer()
     : Node("pid_server_node")
     {
 
-        this->declare_parameter<double>("pid.w.kp", 0.07);
-        this->declare_parameter<double>("pid.w.ki", 0.0);
-        this->declare_parameter<double>("pid.w.kd", 0.0);
+        this->declare_parameter<double>("pid.w.kp", 4.0);
+        this->declare_parameter<double>("pid.w.ki", 5.0);
+        this->declare_parameter<double>("pid.w.kd", 1.0);
 
         pid_w_ = std::make_unique<PID>(
             this->get_parameter("pid.w.kp").as_double(),
             this->get_parameter("pid.w.ki").as_double(),
             this->get_parameter("pid.w.kd").as_double(),
-            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.7f, 0.7f, 10, 0.25f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
         // graph_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/sick_error", sensor_qos());
@@ -27,7 +27,6 @@ YawPIDServer::YawPIDServer()
             std::bind(&YawPIDServer::handle_accepted, this, std::placeholders::_1)
         );
 
-        pid_w_->setTunings(0.01f, 0.0f, 0.0f);
         RCLCPP_INFO(this->get_logger(), "Yaw PID Server started");
 
         pid_w_->init(); //This resets a timer
@@ -81,12 +80,11 @@ rclcpp_action::GoalResponse YawPIDServer::handle_goal(
     
     {    
         std::lock_guard<std::mutex> lock(data_mutex_);
-        int data_ob = goal->setpoint_yaw;
-        if(imu_ready_){
-            sp_yaw = wrapAngle(data_ob);
-            sp_yaw = data_ob + imu_data;
-            goal_active_ = true;
-        }
+        float data_ob = goal->setpoint_yaw;
+        
+        sp_yaw = wrapAngle(data_ob + imu_data);
+        goal_active_ = true;
+        
     }
         // RCLCPP_INFO(this->get_logger(), "PID goal received and setpoints updated to : %.2f, %.2f, %.2f, %.2f", true_goal_sp_[0], true_goal_sp_[1], true_goal_sp_[2], true_goal_sp_[3]);
         resetVel();    

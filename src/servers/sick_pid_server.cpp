@@ -17,14 +17,14 @@ SickPIDServer::SickPIDServer()
             this->get_parameter("pid.vx.kp").as_double(),
             this->get_parameter("pid.vx.ki").as_double(),
             this->get_parameter("pid.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.5f, 0.5f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
         
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("pid.vy.kp").as_double(),
             this->get_parameter("pid.vy.ki").as_double(),
             this->get_parameter("pid.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.5f, 0.5f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", sensor_qos(),
