@@ -13,7 +13,7 @@ YawPIDServer::YawPIDServer()
             this->get_parameter("pid.w.kp").as_double(),
             this->get_parameter("pid.w.ki").as_double(),
             this->get_parameter("pid.w.kd").as_double(),
-            -0.7f, 0.7f, 10, 0.25f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.7f, 0.7f, 10, 0.005f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
         // graph_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/sick_error", sensor_qos());
@@ -37,6 +37,25 @@ void YawPIDServer::imuCallback(const std_msgs::msg::Float32::SharedPtr msg)
 {
     imu_ready_ = true;
     imu_data = msg->data;
+    // RCLCPP_INFO(this->get_logger(),"Current imu position %f", imu_data);
+}
+
+float YawPIDServer::toYawPidSetpoint(float setpoint, float current, AngularDirectionType dir)
+{
+    float angleDiff = wrapAngle(setpoint) - wrapAngle(current);
+    switch (dir) {
+        case AUTO:
+            if (angleDiff > M_2_PI)       angleDiff -= M_2_PI;
+            else if (angleDiff < -M_PI) angleDiff += M_2_PI;
+            break;
+        case ANTICLOCKWISE:
+            if (angleDiff < 0) angleDiff += M_2_PI;
+            break;
+        case CLOCKWISE:
+            if (angleDiff > 0) angleDiff -= M_2_PI;
+            break;
+    }
+    return current + angleDiff;
 }
 
 void YawPIDServer::pidLoop()
@@ -82,8 +101,9 @@ rclcpp_action::GoalResponse YawPIDServer::handle_goal(
         std::lock_guard<std::mutex> lock(data_mutex_);
         float data_ob = goal->setpoint_yaw;
         
-        sp_yaw = wrapAngle(data_ob + imu_data);
+        sp_yaw = toYawPidSetpoint(data_ob, imu_data); // CMADT_AUTO by default
         goal_active_ = true;
+        RCLCPP_INFO(this->get_logger(), "Setpoint: %f", sp_yaw);
         
     }
         // RCLCPP_INFO(this->get_logger(), "PID goal received and setpoints updated to : %.2f, %.2f, %.2f, %.2f", true_goal_sp_[0], true_goal_sp_[1], true_goal_sp_[2], true_goal_sp_[3]);

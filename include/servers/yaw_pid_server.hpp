@@ -75,6 +75,8 @@ private:
         return angle - PI;
     }
 
+
+
     // ---------------- Action server handlers ----------------
     rclcpp_action::GoalResponse handle_goal(
         const rclcpp_action::GoalUUID &uuid,
@@ -87,7 +89,11 @@ private:
 
     void handle_accepted(const std::shared_ptr<GoalHandleMovement> goal_handle);
     void execute(const std::shared_ptr<GoalHandleMovement> goal_handle);
+    enum AngularDirectionType { 
+        AUTO, ANTICLOCKWISE, CLOCKWISE 
+    };
 
+    float toYawPidSetpoint(float setpoint, float current, AngularDirectionType dir = AUTO);
 
 };
 
