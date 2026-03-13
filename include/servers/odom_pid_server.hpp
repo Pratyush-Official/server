@@ -13,6 +13,7 @@
 
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/int32_multi_array.hpp"
+#include "std_msgs/msg/u_int32_multi_array.hpp"
 
 #include "geometry_msgs/msg/twist.hpp"
 
@@ -31,11 +32,12 @@ private:
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
     rclcpp_action::Server<Movement>::SharedPtr action_server_;
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr odom_sub_;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr slider_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr pid_slider;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr graph_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pid_plotter;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr setpoint_pub;
-    std_msgs::msg::Float32MultiArray setpoint_;
+    std_msgs::msg::Float32MultiArray pid_slider_inputs;
+    std_msgs::msg::Float32MultiArray pid_slider_plotter;
     rclcpp::TimerBase::SharedPtr pid_timer_;
 
     std::unique_ptr<PID> pid_vx_;
@@ -72,6 +74,7 @@ private:
 
     void odomCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
     void sliderCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
+    void pidCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
     void pidLoop();
     void resetVel();
 

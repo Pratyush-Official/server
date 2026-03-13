@@ -17,13 +17,13 @@ OdomPIDServer::OdomPIDServer()
             this->get_parameter("odom.vx.kp").as_double(),
             this->get_parameter("odom.vx.ki").as_double(),
             this->get_parameter("odom.vx.kd").as_double(),
-            -0.7f, 0.7f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("odom.vy.kp").as_double(),
             this->get_parameter("odom.vy.ki").as_double(),
             this->get_parameter("odom.vy.kd").as_double(),
-            -0.7f, 0.7f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
 
@@ -31,6 +31,9 @@ OdomPIDServer::OdomPIDServer()
             "/odom_data", sensor_qos(),
             std::bind(&OdomPIDServer::odomCallback, this, std::placeholders::_1)
         );
+
+        pid_slider = this->create_subscription<std_msgs::msg::Float32MultiArray>("/pid_gains", 10, std::bind(&OdomPIDServer::pidCallback, this, std::placeholders::_1));
+        pid_plotter = this->create_publisher<std_msgs::msg::Float32MultiArray>("/pid_tune", 10);
 
         action_server_ = rclcpp_action::create_server<Movement>(
             this,
@@ -74,15 +77,22 @@ void OdomPIDServer::pidLoop()
     geometry_msgs::msg::Twist cmd;
     RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
 
+    pid_vx_->setTunings(pid_slider_inputs.data[0], pid_slider_inputs.data[1], pid_slider_inputs.data[2]);
+
     {
         std::lock_guard<std::mutex> lock(data_mutex_);
         if (!odom_ready_ || !goal_active_ || true_goal_sp_.size() < 2) return;
 
         odom_vx = odom_vals_[0] - odom_start1_;
         odom_vy = odom_vals_[1] - odom_start2_;
-        sp_vx   = true_goal_sp_[0];
+
+        
         sp_vy   = true_goal_sp_[1];
+        // sp_vx   = true_goal_sp_[0];
+        // sp_vy   = true_goal_sp_[1];
     }
+
+    sp_vx   = pid_slider_inputs.data[3];
 
     error_vx = sp_vx - odom_vx;
 
@@ -90,12 +100,18 @@ void OdomPIDServer::pidLoop()
     pid_vx_->setpoint = sp_vx;
     pid_vx_->compute();
 
+    pid_slider_plotter.data = {pid_vx_->input, pid_vx_->setpoint, 0.0f, 0.0f};
+    pid_plotter->publish(pid_slider_plotter);
     // RCLCPP_INFO(this->get_logger(),
     //             "PID Loop: input=%.4f  setpoint=%.4f  error=%.4f  output=%.4f",
     //             odom_vx, sp_vx, error_vx, pid_vx_->output);
 
-    cmd.linear.x = -(pid_vx_->output);
+    cmd.linear.x = (pid_vx_->output);
     cmd_pub_->publish(cmd);
+}
+
+void OdomPIDServer::pidCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg){
+    pid_slider_inputs.data = msg->data;
 }
 
 // ---------------- ACTION SERVER ----------------
@@ -169,7 +185,7 @@ void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
 
     while (rclcpp::ok() && goal_active_ && odom_ready_) {
 
-        if (pid_vx_->is_allowable_error) {
+        if (true == false) {
             goal_active_ = false;
 
             RCLCPP_INFO(this->get_logger(), "PID goal reached");
