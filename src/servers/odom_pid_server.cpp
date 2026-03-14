@@ -174,11 +174,11 @@ void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
     }
 
     // Snapshot odom at goal start
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        odom_start1_ = odom_vals_[0];
-        odom_start2_ = odom_vals_[1];
-    }
+    // {
+    //     std::lock_guard<std::mutex> lock(data_mutex_);
+    //     odom_start1_ = odom_vals_[0];
+    //     odom_start2_ = odom_vals_[1];
+    // }
 
     pid_vx_->reset();
     pid_vy_->reset();
