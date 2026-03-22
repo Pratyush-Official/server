@@ -3,7 +3,6 @@
 AlignServerNode::AlignServerNode()
     : Node("align_server_node")
     {
-
         this->declare_parameter<double>("pid.w.kp",  0.01);
         this->declare_parameter<double>("pid.w.ki",  0.1);
         this->declare_parameter<double>("pid.w.kd",  0.0);
