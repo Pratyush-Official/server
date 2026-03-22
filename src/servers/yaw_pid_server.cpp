@@ -4,7 +4,6 @@
 YawPIDServer::YawPIDServer()
     : Node("pid_server_node")
     {
-
         this->declare_parameter<double>("pid.w.kp", 4.0);
         this->declare_parameter<double>("pid.w.ki", 5.0);
         this->declare_parameter<double>("pid.w.kd", 1.0);
