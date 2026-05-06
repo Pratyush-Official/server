@@ -185,7 +185,7 @@ void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
 
     while (rclcpp::ok() && goal_active_ && odom_ready_) {
 
-        if (true == false) {
+        if (pid_vx_->is_allowable_error) {
             goal_active_ = false;
 
             RCLCPP_INFO(this->get_logger(), "PID goal reached");
