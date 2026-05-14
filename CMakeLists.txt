@@ -33,12 +33,13 @@ add_executable(align_server_node
   include/robotlibpc/cpp/controller/pid.cpp
 )
 
-add_executable(test_yaw_node
-  src/TestingCodes/test_yaw.cpp       
-)
-
 add_executable(yaw_server_node
   src/servers/yaw_pid_server.cpp
+  include/robotlibpc/cpp/controller/pid.cpp
+)
+
+add_executable(sick_tuning
+  src/TestingCodes/sick_tuning.cpp
   include/robotlibpc/cpp/controller/pid.cpp
 )
 
@@ -66,11 +67,6 @@ ament_target_dependencies(align_server_node
   geometry_msgs
 )
 
-ament_target_dependencies(test_yaw_node
-  rclcpp
-  std_msgs
-)
-
 ament_target_dependencies(yaw_server_node
   rclcpp
   rclcpp_action
@@ -79,12 +75,16 @@ ament_target_dependencies(yaw_server_node
   geometry_msgs
 )
 
+ament_target_dependencies(sick_tuning
+  rclcpp std_msgs geometry_msgs
+)
+
 install(TARGETS
   sick_server_node
   odom_server_node
   align_server_node
-  test_yaw_node
   yaw_server_node
+  sick_tuning
   DESTINATION lib/${PROJECT_NAME}
 )
 

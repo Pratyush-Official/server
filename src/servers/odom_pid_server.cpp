@@ -59,8 +59,8 @@ void OdomPIDServer::odomCallback(const std_msgs::msg::Int32MultiArray::SharedPtr
         const float wheel_diameter = 0.0574f;
         const int counts_per_rev = 4000;
 
-        float dist1 = (data[1] * 3.1416f * wheel_diameter) / counts_per_rev; //pins were swapped, will change this later
-        float dist2 = (data[0] * 3.1416f * wheel_diameter) / counts_per_rev;
+        float dist1 = (data[0] * 3.1416f * wheel_diameter) / counts_per_rev; //pins were swapped, will change this later(reverted it)
+        float dist2 = (data[1] * 3.1416f * wheel_diameter) / counts_per_rev;
 
         odom_vals_[0] = dist1;
         odom_vals_[1] = dist2;
@@ -87,7 +87,6 @@ void OdomPIDServer::pidLoop()
         odom_vy = odom_vals_[1] - odom_start2_;
 
         
-        sp_vy   = true_goal_sp_[1];
         // sp_vx   = true_goal_sp_[0];
         // sp_vy   = true_goal_sp_[1];
     }
@@ -174,11 +173,11 @@ void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
     }
 
     // Snapshot odom at goal start
-    // {
-    //     std::lock_guard<std::mutex> lock(data_mutex_);
-    //     odom_start1_ = odom_vals_[0];
-    //     odom_start2_ = odom_vals_[1];
-    // }
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        odom_start1_ = odom_vals_[0];
+        odom_start2_ = odom_vals_[1];
+    }
 
     pid_vx_->reset();
     pid_vy_->reset();
@@ -194,6 +193,7 @@ void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
             pid_vx_->reset();
             pid_vy_->reset();
             break;
+
         } else {
             pidLoop();
         }

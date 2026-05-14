@@ -66,7 +66,7 @@ private:
     std::vector<float> true_goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
     std::vector<float> goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
     std::vector<float> slider_data_{0.0f, 0.0f, 0.0f, 0.0f}; // default
-    bool goal_active_{false};
+    std::atomic<bool> goal_active_{false}; //made atomic
 
     // ---------------- Callbacks ----------------
     void sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);

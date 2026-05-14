@@ -35,10 +35,6 @@ SickPIDServer::SickPIDServer()
 
         graph_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/sick_error", sensor_qos());
 
-        // slider_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-        //     "/pid_gains", 10,
-        //     std::bind(&SickPIDServer::sliderCallback, this, std::placeholders::_1));
-
         action_server_ = rclcpp_action::create_server<Movement>(
             this,
             "/movement_sick",
@@ -108,17 +104,7 @@ void SickPIDServer::pidLoop()
     
     cmd.linear.x  = -(pid_vx_->output);
     cmd.linear.y  = (pid_vy_->output);
-
-    // RCLCPP_INFO(this->get_logger(), "PID input x: %.2f", FL);
-
-    graph_out.data.clear();
-    graph_out.data.push_back(pid_vx_->input);
-    graph_out.data.push_back(pid_vx_->setpoint);
-    graph_out.data.push_back(pid_vx_->output);
-    // graph_out.data.push_back(pid_vy_->input);
-    // graph_out.data.push_back(pid_vy_->setpoint);
-                 
-    // graph_pub_->publish(graph_out);
+                
     cmd_pub_->publish(cmd);
 }
 
@@ -142,6 +128,7 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
             true_goal_sp_[i] = static_cast<float>(goal->setpoint_sick[i])/10.0f; // convert mm -> m if needed
         }
         goal_active_ = true;
+        
         // RCLCPP_INFO(this->get_logger(), "PID goal received and setpoints updated to : %.2f, %.2f, %.2f, %.2f", true_goal_sp_[0], true_goal_sp_[1], true_goal_sp_[2], true_goal_sp_[3]);
         resetVel();    
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -166,8 +153,8 @@ void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> go
 {
     RCLCPP_INFO(this->get_logger(), "Starting PID goal execution"); 
     resetVel(); // Ensure robot is stopped at start of new goal
-    // pid_vx_->reset();
-    // pid_vy_->reset();
+    pid_vx_->reset();
+    pid_vy_->reset();
 
     // pid_vx_->setMode(AUTOMATIC); 
     // pid_vy_->setMode(AUTOMATIC);
