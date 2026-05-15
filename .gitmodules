@@ -1,0 +1,3 @@
+[submodule "include/robotlibpc"]
+	path = include/robotlibpc
+	url = git@github.com:Robotics-Club-Pulchowk/robotlibpc.git
