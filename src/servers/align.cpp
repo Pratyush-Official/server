@@ -1,4 +1,5 @@
 #include "servers/align.hpp"
+#include "qos_profiles.hpp"
 
 AlignServerNode::AlignServerNode()
     : Node("align_server_node")
@@ -11,10 +12,10 @@ AlignServerNode::AlignServerNode()
             this->get_parameter("pid.w.kp").as_double(),
             this->get_parameter("pid.w.ki").as_double(),
             this->get_parameter("pid.w.kd").as_double(),
-            -1.0f, 1.0f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2f, 10, 0.01f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-            "/sick_data", 10,
+            "/sick_data", sensor_qos(),
             std::bind(&AlignServerNode::sickCallback, this, std::placeholders::_1)
         );
 
@@ -44,10 +45,13 @@ void AlignServerNode::pidLoop()
 {
     RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
     if (!sick_ready_ || !goal_active_) return;
+
     float FL = sick_vals_[0];
     float FR = sick_vals_[1];
-    float sp_FL = goal_sp_[0];
-    float sp_FR = goal_sp_[1];
+
+    // float sp_FL = goal_sp_[0];
+    // float sp_FR = goal_sp_[1];
+
     float sp_yaw = 0.0f;
     //float sp_yaw = (sick_vals_[0] + sick_vals_[1]) * 0.5f;
     error_w = FL - FR;

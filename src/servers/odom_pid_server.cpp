@@ -1,229 +1,228 @@
 #include "servers/odom_pid_server.hpp"
 #include "qos_profiles.hpp"
 
-OdomPIDServer::OdomPIDServer()
-    : Node("pid_server_node")
-    {
+#include <cmath>
+#include <cstdio>
+#include <chrono>
+#include <thread>
 
-        this->declare_parameter<double>("odom.vx.kp", 0.6);
-        this->declare_parameter<double>("odom.vx.ki", 0.1);
-        this->declare_parameter<double>("odom.vx.kd", 0.0);
+static constexpr float ENCODER_X_SIGN = -1.0f;
+static constexpr float ENCODER_Y_SIGN = -1.0f;
 
-        this->declare_parameter<double>("odom.vy.kp", 0.1);
-        this->declare_parameter<double>("odom.vy.ki", 0.1);
-        this->declare_parameter<double>("odom.vy.kd", 0.0);
-
-        pid_vx_ = std::make_unique<PID>(
-            this->get_parameter("odom.vx.kp").as_double(),
-            this->get_parameter("odom.vx.ki").as_double(),
-            this->get_parameter("odom.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
-
-        pid_vy_ = std::make_unique<PID>(
-            this->get_parameter("odom.vy.kp").as_double(),
-            this->get_parameter("odom.vy.ki").as_double(),
-            this->get_parameter("odom.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, 0.1f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
-
-        cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", cmd_vel_qos());
-
-        odom_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "/odom_data", sensor_qos(),
-            std::bind(&OdomPIDServer::odomCallback, this, std::placeholders::_1)
-        );
-
-        pid_slider = this->create_subscription<std_msgs::msg::Float32MultiArray>("/pid_gains", 10, std::bind(&OdomPIDServer::pidCallback, this, std::placeholders::_1));
-        pid_plotter = this->create_publisher<std_msgs::msg::Float32MultiArray>("/pid_tune", 10);
-
-        action_server_ = rclcpp_action::create_server<Movement>(
-            this,
-            "/movement_odom",
-            std::bind(&OdomPIDServer::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-            std::bind(&OdomPIDServer::handle_cancel, this, std::placeholders::_1),
-            std::bind(&OdomPIDServer::handle_accepted, this, std::placeholders::_1)
-        );
-
-        pid_vx_->init();
-        pid_vy_->init();
-
-        RCLCPP_INFO(this->get_logger(), "Odom PID server started");
-    }
-
-// ---------------- CALLBACKS ----------------
-void OdomPIDServer::odomCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg)
+OdomPIDServer::OdomPIDServer(const rclcpp::NodeOptions & options)
+: Node("move_server", options)
 {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (msg->data.size() >= 2) {
-        data = msg->data;
+    rclcpp::QoS qos_profile(10);
+    qos_profile.reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT);
 
-        const float wheel_diameter = 0.0574f;
-        const int counts_per_rev = 4000;
+    this->declare_parameter("x_kp", 0.1);
+    this->declare_parameter("x_ki", 0.0);
+    this->declare_parameter("x_kd", 0.0);
+    this->declare_parameter("y_kp", 0.1);
+    this->declare_parameter("y_ki", 0.0);
+    this->declare_parameter("y_kd", 0.0);
+    
+    this->declare_parameter("dist_tol",10.0);
+    this->declare_parameter("max_vel",1.0);
+    this->declare_parameter("sample_time",10);
 
-        float dist1 = (data[0] * 3.1416f * wheel_diameter) / counts_per_rev; //pins were swapped, will change this later(reverted it)
-        float dist2 = (data[1] * 3.1416f * wheel_diameter) / counts_per_rev;
+    x_kp = this->get_parameter("x_kp").as_double();
+    x_ki = this->get_parameter("x_ki").as_double();
+    x_kd = this->get_parameter("x_kd").as_double();
+    y_kp = this->get_parameter("y_kp").as_double();
+    y_ki = this->get_parameter("y_ki").as_double();
+    y_kd = this->get_parameter("y_kd").as_double();
 
-        odom_vals_[0] = dist1;
-        odom_vals_[1] = dist2;
+    dist_tol_ = this->get_parameter("dist_tol").as_double();
+    max_vel_ = this->get_parameter("max_vel").as_double();
+    sample_time_ = this->get_parameter("sample_time").as_int();
 
-        odom_ready_ = true;
+    cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(
+        "/cmd_vel", cmd_vel_qos());
 
-        printf("Odom 1: %f Odom 2: %f \n", dist1, dist2);
-    }
+    odom_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+        "/odom_dist_m", sensor_qos(),
+        std::bind(&OdomPIDServer::odomCallback, this, std::placeholders::_1));
+
+    prox_front_sub_ = this->create_subscription<std_msgs::msg::Byte>(
+        "/prox_front_received", sensor_qos(),
+        std::bind(&OdomPIDServer::proxFrontCallback, this, std::placeholders::_1));
+
+    x_pid = PID(x_kp, x_ki, x_kd, -0.3, 0.3, sample_time_);
+    y_pid = PID(y_kp, y_ki, y_kd, -0.3, 0.3, sample_time_);
+
+    action_server_ = rclcpp_action::create_server<MoveTwist>(
+        this,
+        "move_twist",
+        std::bind(&OdomPIDServer::handleGoal,     this, std::placeholders::_1, std::placeholders::_2),
+        std::bind(&OdomPIDServer::handleCancel,   this, std::placeholders::_1),
+        std::bind(&OdomPIDServer::handleAccepted, this, std::placeholders::_1));
+
+    is_action_finished = false;
+    is_movex_done = false;
+    is_movey_done = false;
+    RCLCPP_INFO(this->get_logger(), "[OdomPIDServer] Ready.");
 }
 
-// ---------------- PID LOOP ----------------
-void OdomPIDServer::pidLoop()
-{
-    geometry_msgs::msg::Twist cmd;
-    RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
-
-    pid_vx_->setTunings(pid_slider_inputs.data[0], pid_slider_inputs.data[1], pid_slider_inputs.data[2]);
-
-    {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        if (!odom_ready_ || !goal_active_ || true_goal_sp_.size() < 2) return;
-
-        odom_vx = odom_vals_[0] - odom_start1_;
-        odom_vy = odom_vals_[1] - odom_start2_;
-
-        
-        // sp_vx   = true_goal_sp_[0];
-        // sp_vy   = true_goal_sp_[1];
-    }
-
-    sp_vx   = pid_slider_inputs.data[3];
-
-    error_vx = sp_vx - odom_vx;
-
-    pid_vx_->input    = odom_vx;
-    pid_vx_->setpoint = sp_vx;
-    pid_vx_->compute();
-
-    pid_slider_plotter.data = {pid_vx_->input, pid_vx_->setpoint, 0.0f, 0.0f};
-    pid_plotter->publish(pid_slider_plotter);
-    // RCLCPP_INFO(this->get_logger(),
-    //             "PID Loop: input=%.4f  setpoint=%.4f  error=%.4f  output=%.4f",
-    //             odom_vx, sp_vx, error_vx, pid_vx_->output);
-
-    cmd.linear.x = (pid_vx_->output);
-    cmd_pub_->publish(cmd);
-}
-
-void OdomPIDServer::pidCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg){
-    pid_slider_inputs.data = msg->data;
-}
-
-// ---------------- ACTION SERVER ----------------
-rclcpp_action::GoalResponse OdomPIDServer::handle_goal(
+rclcpp_action::GoalResponse OdomPIDServer::handleGoal(
     const rclcpp_action::GoalUUID &uuid,
-    std::shared_ptr<const Movement::Goal> goal)
+    std::shared_ptr<const MoveTwist::Goal> goal)
 {
-    (void) uuid;
-    RCLCPP_INFO(this->get_logger(), "Received PID goal request");
+    (void)uuid;
 
-    if (goal_active_) {
-        RCLCPP_WARN(this->get_logger(), "PID busy, rejecting new goal");
-        resetVel();
-        return rclcpp_action::GoalResponse::REJECT;
-    }
+    odom_dist_x_start = odom_dist_x_;
+    odom_dist_y_start = odom_dist_y_;
 
-    if (goal->setpoint_odom.size() >= 2) {
-        true_goal_sp_.resize(2);
-        for (size_t i = 0; i < 2; ++i) {
-            true_goal_sp_[i] = static_cast<float>(goal->setpoint_odom[i]);
-        }
+    x_pid.setTunings(x_kp, x_ki, x_kd);
+    y_pid.setTunings(y_kp, y_ki, y_kd);
+   
+    x_pid.setOutputLimits(-0.7,0.7);
+    y_pid.setOutputLimits(-0.7,0.7);
+    x_pid.setMode(AUTOMATIC);
+    y_pid.setMode(AUTOMATIC);
 
-        goal_active_ = true;
+    x_pid.setpoint = goal->move_x;
+    y_pid.setpoint = goal->move_y;
 
-        RCLCPP_INFO(this->get_logger(), "PID goal received: setpoints = %.4f, %.4f",
-                    true_goal_sp_[0], true_goal_sp_[1]);
-        resetVel();
-        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-    } else {
-        RCLCPP_WARN(this->get_logger(), "PID goal rejected: setpoint_odom has less than 2 elements");
-        resetVel();
-        return rclcpp_action::GoalResponse::REJECT;
-    }
+    is_action_finished = false;
+    is_movex_done = false;
+    is_movey_done = false;
+
+    RCLCPP_INFO(this->get_logger(),"[OdomPIDServer] Goal received : move_x=%.1f mm  move_y=%.1f mm",
+                goal->move_x, goal->move_y);
+   
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse OdomPIDServer::handle_cancel(const std::shared_ptr<GoalHandleMovement> goal_handle)
+rclcpp_action::CancelResponse OdomPIDServer::handleCancel(
+    const std::shared_ptr<GoalHandleMove> /*goal_handle*/)
 {
-    (void) goal_handle;
-    goal_active_ = false;
-    RCLCPP_WARN(this->get_logger(), "PID goal canceled");
-    resetVel();
+    RCLCPP_WARN(this->get_logger(), "[OdomPIDServer] Cancel requested.");
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void OdomPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> goal_handle)
+void OdomPIDServer::handleAccepted(const std::shared_ptr<GoalHandleMove> goal_handle)
 {
-    RCLCPP_INFO(this->get_logger(), "Starting PID goal execution");
-    resetVel();
-    std::thread([this, goal_handle]() { execute(goal_handle); }).detach();
+    using namespace std::placeholders;
+    std::thread{
+        std::bind(&OdomPIDServer::execute, this, _1),
+        goal_handle,
+    }
+        .detach();
 }
 
-void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handle)
+void OdomPIDServer::execute(const std::shared_ptr<GoalHandleMove> goal_handle)
 {
-    auto result = std::make_shared<Movement::Result>();
-    rclcpp::Rate rate(100); // 10ms loop
+    RCLCPP_INFO(this->get_logger(), "[OdomPIDServer] Executing");
 
-    // Wait until odom data arrives
-    while (rclcpp::ok() && !odom_ready_) {
-        rate.sleep();
-    }
-
-    // Snapshot odom at goal start
+    auto feedback = std::make_shared<MoveTwist::Feedback>();
+    auto result   = std::make_shared<MoveTwist::Result>();
+   
+    if(!odom_fresh_)
     {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        odom_start1_ = odom_vals_[0];
-        odom_start2_ = odom_vals_[1];
-    }
+        const auto wait_start = std::chrono::steady_clock::now();
+        const auto wait_timeout = std::chrono::seconds(2);
 
-    pid_vx_->reset();
-    pid_vy_->reset();
-
-    while (rclcpp::ok() && goal_active_ && odom_ready_) {
-
-        if (pid_vx_->is_allowable_error) {
-            goal_active_ = false;
-
-            RCLCPP_INFO(this->get_logger(), "PID goal reached");
-
-            resetVel();
-            pid_vx_->reset();
-            pid_vy_->reset();
-            break;
-
-        } else {
-            pidLoop();
+        while (!odom_fresh_
+               && (std::chrono::steady_clock::now() - wait_start) < wait_timeout
+               && rclcpp::ok())
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
 
-        rate.sleep();
+        if (!odom_fresh_)
+        {
+            RCLCPP_WARN(this->get_logger(), "[OdomPIDServer] odom not available after wait");
+            result->success          = false;
+            result->final_avg_dist_m = 0.0;
+            goal_handle->abort(result);
+            return;
+        }
     }
 
-    goal_active_ = false;
+    while (!is_action_finished)
+    {
+        float vx = 0.0f;
+        float vy = 0.0f;
+  
+        x_pid.input = (odom_dist_x_ - odom_dist_x_start)*1000;
+        y_pid.input = (odom_dist_y_ - odom_dist_y_start)*1000;
+
+        x_pid.compute();
+        y_pid.compute();
+
+        vx = x_pid.output;
+        vy = y_pid.output;
+
+        RCLCPP_INFO(this->get_logger(),"[OdomPIDServer] Goal received : X_SETPOINT=%.1f mm  X_INPUT=%.1f mm Y_SETPOINT=%.1f mm  Y_INPUT=%.1f mm ",
+                x_pid.setpoint, x_pid.input, y_pid.setpoint, y_pid.input);
+        
+        if (fabs(x_pid.setpoint - x_pid.input) < dist_tol_)
+        {   
+            vx = 0.0;
+            is_movex_done = true;
+            printf("x true\n");
+        }
+        
+        if (fabs(y_pid.setpoint - y_pid.input) < dist_tol_)
+        {
+            vy = 0.0;
+            is_movey_done = true;  
+            printf("y true\n");
+
+        }
+        publishVel(vx, vy);
+
+        if (is_movex_done && is_movey_done)
+        { 
+            is_action_finished = true;
+            publishVel(0.0f, 0.0f);
+            RCLCPP_INFO(this->get_logger(), "[OdomPIDServer] Completed");
+
+        }
+    }
+
+    result->success = true;
+    result->final_avg_dist_m = 0.0;
     goal_handle->succeed(result);
-    RCLCPP_INFO(this->get_logger(), "PID goal succeeded");
 }
 
-void OdomPIDServer::resetVel()
+void OdomPIDServer::odomCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
-    geometry_msgs::msg::Twist cmd;
-    cmd.linear.x = 0.0f;
-    cmd.linear.y = 0.0f;
-    cmd_pub_->publish(cmd);
+    if (msg->data.size() < 2) {
+        RCLCPP_WARN(this->get_logger(),
+                    "[OdomPIDServer] Odom data size < 2: %zu", msg->data.size());
+        return;
+    }
+    odom_dist_x_ = msg->data[0];
+    odom_dist_y_ = msg->data[1];
+    odom_fresh_  = true;
 }
 
-// ---------------- MAIN ----------------
-int main(int argc, char **argv)
+void OdomPIDServer::proxFrontCallback(const std_msgs::msg::Byte::SharedPtr msg)
+{
+    if  (msg->data == 1)
+    {
+        prox_front_triggered_ = true;
+    }
+}
+
+void OdomPIDServer::publishVel(float vx, float vy)
+{
+    geometry_msgs::msg::Twist twist;
+    twist.linear.x  = vx;
+    twist.linear.y  = vy;
+    twist.angular.z = 0.0;
+
+    cmd_vel_pub_->publish(twist);
+}
+
+int main(int argc, char ** argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<OdomPIDServer>();
-
-    rclcpp::executors::MultiThreadedExecutor executor;
-    executor.add_node(node);
-    executor.spin();
-
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }
+
