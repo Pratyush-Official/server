@@ -45,9 +45,9 @@ private:
     bool y_reached = false;
 
     float FL;
-    float L;
+    float SD;
     float sp_FL;
-    float sp_L;
+    float sp_SD;
     
     float error_vx = 0.0f;
     float error_vy = 0.0f;
@@ -69,8 +69,8 @@ private:
 
     // ---------------- CLIENT SETPOINTS ----------------
     std::vector<float> true_goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<int> sick_choices_{0, 2};
     std::vector<float> goal_sp_{0.0f, 0.0f, 0.0f, 0.0f};
-    std::vector<float> slider_data_{0.0f, 0.0f, 0.0f, 0.0f};
     std::atomic<bool> goal_active_{false};
 
     // ---------------- Callbacks ----------------

@@ -87,16 +87,19 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
 
         }
 
+    if (goal->sick_choose.size() >= 2){
+        for(size_t j = 0; j<2; j++){
+            sick_choices_[j] = static_cast<int>(goal->sick_choose[j]);
+        }
+    }
+
     pid_vx_->setpoint = true_goal_sp_[0];
-    pid_vy_->setpoint = true_goal_sp_[2];
+    pid_vy_->setpoint = true_goal_sp_[sick_choices_[1]];
 
     service_complete = false;
     goal_active_ = true;
-    
     resetVel();    
-
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-
     } 
     
     else {
@@ -152,11 +155,6 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
         float vx = 0.0f;
         float vy = 0.0f;
 
-        float FL = 0.0f;
-        float L = 0.0f;
-        float sp_FL = 0.0f;
-        float sp_L = 0.0f;
-
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             if (!sick_ready_ || true_goal_sp_.size() < 4) {
@@ -164,22 +162,21 @@ void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handl
                 continue;
             }
             FL = sick_vals_[0];
-            L = sick_vals_[2];
+            SD = sick_vals_[sick_choices_[1]];
             sp_FL = true_goal_sp_[0];
-            sp_L  = true_goal_sp_[2];
+            sp_SD  = true_goal_sp_[sick_choices_[1]];
         }
 
         pid_vx_->input = FL;
-        pid_vy_->input = L;
-
-        pid_vx_->setpoint = sp_FL;
-        pid_vy_->setpoint = sp_L;
+        pid_vy_->input = SD;
 
         pid_vx_->compute();
         pid_vy_->compute();
 
-        vx = -(pid_vx_->output);
-        vy = (pid_vy_->output);
+        vx = (pid_vx_->output);
+
+        if(sick_choices_[1] == 2) vy = - (pid_vy_->output);
+        if(sick_choices_[1] == 3) vy = (pid_vy_->output);
 
         RCLCPP_INFO(this->get_logger(),
             "[SickPIDServer] Goal received : X_SETPOINT=%.1f X_INPUT=%.1f Y_SETPOINT=%.1f Y_INPUT=%.1f",
