@@ -1,10 +1,11 @@
 #include "servers/sick_pid_server.hpp"
 #include "qos_profiles.hpp"
+#include <fstream>
+#include <chrono>
 
 SickPIDServer::SickPIDServer()
     : Node("pid_server_node")
     {
-
         this->declare_parameter<double>("pid.vx.kp", 0.07);
         this->declare_parameter<double>("pid.vx.ki", 0.0);
         this->declare_parameter<double>("pid.vx.kd", 0.0);
@@ -12,21 +13,18 @@ SickPIDServer::SickPIDServer()
         this->declare_parameter<double>("pid.vy.kp", 0.1);
         this->declare_parameter<double>("pid.vy.ki", 0.0);
         this->declare_parameter<double>("pid.vy.kd", 0.0);
-    
-        this->declare_parameter("dist_tol",100.0);
 
         pid_vx_ = std::make_unique<PID>(
             this->get_parameter("pid.vx.kp").as_double(),
             this->get_parameter("pid.vx.ki").as_double(),
             this->get_parameter("pid.vx.kd").as_double(),
-            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
-        
+            -0.2f, 0.2, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         pid_vy_ = std::make_unique<PID>(
             this->get_parameter("pid.vy.kp").as_double(),
             this->get_parameter("pid.vy.ki").as_double(),
             this->get_parameter("pid.vy.kd").as_double(),
-            -0.2f, 0.2f, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
+            -0.2f, 0.2, 10, 2.0f, DIRECT, PROPORTIONAL_ON_ERROR, AUTOMATIC);
 
         sick_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/sick_data", sensor_qos(),
@@ -43,27 +41,114 @@ SickPIDServer::SickPIDServer()
             std::bind(&SickPIDServer::handle_accepted, this, std::placeholders::_1)
         );
 
-        pid_vx_->setTunings(0.01f, 0.0f, 0.0f);
-        pid_vy_->setTunings(0.009000f, 0.0f, 0.0f);
+        pid_vx_->setTunings(0.01f, 0.0f, 0.0f); //0001=kd
+        pid_vy_->setTunings(0.01f, 0.0f, 0.0f); //0001=kd
+
+        pid_vx_->init();
+        pid_vy_->init();
+
+        // --- CSV logging setup ---
+        csv_file_.open("/home/maomao/ROBOCON_26/2026_ros2_ws/src/pid_log.csv");
+        csv_file_ << "timestamp,vx_input,vx_setpoint,vx_output,vy_input,vy_setpoint,vy_output\n";
+
         RCLCPP_INFO(this->get_logger(), "Sick PID Server started");
-
-        pid_vx_->init(); //This resets a timer
-        pid_vy_->init(); //This resets a timer
-
-        service_complete = false;
-        x_reached = false;
-        y_reached = false;
     }
 
+SickPIDServer::~SickPIDServer()
+{
+    if (csv_file_.is_open()) csv_file_.close();
+}
+
+
+// ---------------- CALLBACKS ----------------
 void SickPIDServer::sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
 {
     std::lock_guard<std::mutex> lock(data_mutex_);
     if (msg->data.size() >= 4) {
-        sick_vals_ = msg->data;
+        if (!filter_initialized_) {
+            sick_vals_ = msg->data;
+            filtered_FL_ = msg->data[0];
+            filtered_L_  = msg->data[1];
+            filter_initialized_ = true;
+        } else {
+            float alpha = 0.15f;
+            filtered_FL_ = filtered_FL_ + alpha * (msg->data[0] - filtered_FL_);
+            filtered_L_  = filtered_L_  + alpha * (msg->data[1] - filtered_L_);
+            sick_vals_[0] = filtered_FL_;
+            sick_vals_[1] = filtered_L_;
+            sick_vals_[2] = msg->data[2];
+            sick_vals_[3] = msg->data[3];
+        }
         sick_ready_ = true;
     }
 }
 
+// void SickPIDServer::sickCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+// {
+//     std::lock_guard<std::mutex> lock(data_mutex_);
+//     if (msg->data.size() >= 4) {
+//         sick_vals_ = msg->data;
+//         sick_ready_ = true;
+//     }
+// }
+
+void SickPIDServer::pidLoop()
+{
+    geometry_msgs::msg::Twist cmd;
+    std_msgs::msg::Float32MultiArray graph_out;
+    RCLCPP_DEBUG(this->get_logger(), "PID Loop entered");
+
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        if (!sick_ready_ || !goal_active_ || true_goal_sp_.size() < 4) return;
+
+        FL = sick_vals_[0];
+        L  = sick_vals_[1];
+        sp_FL = true_goal_sp_[0];
+        sp_L  = true_goal_sp_[1];
+    }
+
+    error_vx = (sp_FL - FL);
+    error_vy = (sp_L  - L);
+
+    float deadband = 5.0f; // This is basically to ignore tiny changes in the sick data that would cause the robot to jitter. 
+
+    if (std::abs(sp_FL - FL) < deadband) {
+        pid_vx_->input = sp_FL;  // lie to the PID, tell it error is zero
+    } else {
+        pid_vx_->input = FL;
+    }
+
+    if (std::abs(sp_L - L) < deadband) {
+        pid_vy_->input = sp_L;
+    } else {
+        pid_vy_->input = L;
+    }
+    pid_vx_->setpoint = sp_FL;
+    pid_vy_->setpoint = sp_L;
+
+    pid_vx_->compute();
+    pid_vy_->compute();
+
+    // --- CSV logging ---
+    double t = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    csv_file_ << t                 << ","
+              << pid_vx_->input    << "," << pid_vx_->setpoint << "," << pid_vx_->output << ","
+              << pid_vy_->input    << "," << pid_vy_->setpoint << "," << pid_vy_->output << "\n";
+
+    if (++csv_write_count_ % 100 == 0) csv_file_.flush();
+    // -------------------
+
+    cmd.linear.x = -(pid_vx_->output);
+    cmd.linear.y =  (pid_vy_->output);
+
+    cmd_pub_->publish(cmd);
+}
+
+
+// ---------------- ACTION SERVER ----------------
 rclcpp_action::GoalResponse SickPIDServer::handle_goal(
     const rclcpp_action::GoalUUID &uuid,
     std::shared_ptr<const Movement::Goal> goal)
@@ -72,151 +157,80 @@ rclcpp_action::GoalResponse SickPIDServer::handle_goal(
 
     if (goal_active_) {
         RCLCPP_WARN(this->get_logger(), "PID busy, rejecting new goal");
-
         resetVel();
         return rclcpp_action::GoalResponse::REJECT;
     }
 
     if (goal->setpoint_sick.size() >= 4) {
-        true_goal_sp_.resize(4);  // ensure size
+        true_goal_sp_.resize(4);
         for (size_t i = 0; i < 4; ++i) {
-            true_goal_sp_[i] = static_cast<float>(goal->setpoint_sick[i])/10.0f;
-
-            x_reached = false;
-            y_reached = false;
-
+            true_goal_sp_[i] = static_cast<float>(goal->setpoint_sick[i]);
         }
-
-    if (goal->sick_choose.size() >= 2){
-        for(size_t j = 0; j<2; j++){
-            sick_choices_[j] = static_cast<int>(goal->sick_choose[j]);
-        }
-    }
-
-    pid_vx_->setpoint = true_goal_sp_[0];
-    pid_vy_->setpoint = true_goal_sp_[sick_choices_[1]];
-
-    service_complete = false;
-    goal_active_ = true;
-    resetVel();    
-    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-    } 
-    
-    else {
+        goal_active_ = true;
+        resetVel();
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    } else {
         RCLCPP_WARN(this->get_logger(), "PID goal rejected: setpoint_sick has less than 4 elements");
-
         resetVel();
         return rclcpp_action::GoalResponse::REJECT;
     }
 }
 
-rclcpp_action::CancelResponse SickPIDServer::handle_cancel(const std::shared_ptr<GoalHandleMovement> goal_handle)
+rclcpp_action::CancelResponse SickPIDServer::handle_cancel(
+    const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
     goal_active_ = false;
     RCLCPP_WARN(this->get_logger(), "PID goal canceled");
-
     resetVel();
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void SickPIDServer::handle_accepted(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
-    RCLCPP_INFO(this->get_logger(), "Starting PID goal execution"); 
+    RCLCPP_INFO(this->get_logger(), "Starting PID goal execution");
     resetVel();
-    pid_vx_->reset();
-    pid_vy_->reset();
-    // FIX 2: call init() after reset() to stamp lastTime_ to now,
-    // otherwise the first compute() sees a huge timeChange and fires instantly
-    pid_vx_->init();
-    pid_vy_->init();
-
     std::thread([this, goal_handle]() { execute(goal_handle); }).detach();
 }
 
 void SickPIDServer::execute(const std::shared_ptr<GoalHandleMovement> goal_handle)
 {
-    RCLCPP_INFO(this->get_logger(), "[SickPIDServer] Executing");
-
     auto result = std::make_shared<Movement::Result>();
+    rclcpp::Rate rate(100); // 10ms loop
 
-    rclcpp::Rate rate(100); 
-    while (rclcpp::ok() && goal_active_ && !sick_ready_) {
-        rate.sleep();
-    }
-
-    if (!rclcpp::ok() || !goal_active_) {
-        result->success = false;
-        goal_handle->succeed(result);
-        return;
-    }
-
-    while (rclcpp::ok() && goal_active_ && !service_complete)
-    {
-        float vx = 0.0f;
-        float vy = 0.0f;
+    if (goal_handle->is_canceling())
 
         {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            if (!sick_ready_ || true_goal_sp_.size() < 4) {
-                rate.sleep();
-                continue;
+            geometry_msgs::msg::Twist stop;
+            stop.linear.x = 0.0f;
+            stop.linear.y = 0.0f;
+            cmd_pub_->publish(stop);
+
+            result->success = false;
+            goal_handle->canceled(result);
+            RCLCPP_WARN(this->get_logger(), "[OdomPIDServer] Goal cancelled – stopping.");
+            return;
+        }
+
+    while (rclcpp::ok() && goal_active_ && sick_ready_) {
+
+        if (pid_vx_->is_allowable_error && pid_vy_->is_allowable_error)  {
+                goal_active_ = false;
+                result->success = true;
+
+                RCLCPP_INFO(this->get_logger(), "PID goal reached");
+
+                resetVel();
+                pid_vx_->reset();
+                pid_vy_->reset();
+                break;
             }
-            FL = sick_vals_[0];
-            SD = sick_vals_[sick_choices_[1]];
-            sp_FL = true_goal_sp_[0];
-            sp_SD  = true_goal_sp_[sick_choices_[1]];
-        }
 
-        pid_vx_->input = FL;
-        pid_vy_->input = SD;
-
-        pid_vx_->compute();
-        pid_vy_->compute();
-
-        vx = (pid_vx_->output);
-
-        if(sick_choices_[1] == 2) vy = - (pid_vy_->output);
-        if(sick_choices_[1] == 3) vy = (pid_vy_->output);
-
-        RCLCPP_INFO(this->get_logger(),
-            "[SickPIDServer] Goal received : X_SETPOINT=%.1f X_INPUT=%.1f Y_SETPOINT=%.1f Y_INPUT=%.1f",
-            pid_vx_->setpoint, pid_vx_->input, pid_vy_->setpoint, pid_vy_->input);
-
-        if (fabs(pid_vx_->setpoint - pid_vx_->input) < 2.0f)
-        {
-            vx = 0.0f;
-            x_reached = true;
-            printf("x true\n");
-        }
-
-        if (fabs(pid_vy_->setpoint - pid_vy_->input) < 2.0f)
-        {
-            vy = 0.0f;
-            y_reached = true;
-            printf("y true\n");
-        }
-
-        geometry_msgs::msg::Twist cmd;
-        cmd.linear.x = vx;
-        cmd.linear.y = vy;
-        cmd.angular.z = 0.0f;
-        cmd_pub_->publish(cmd);
-
-        if (x_reached && y_reached)
-        {
-            service_complete = true;
-
-            goal_active_ = false;
-            resetVel();
-            pid_vx_->reset();
-            pid_vy_->reset();
-            RCLCPP_INFO(this->get_logger(), "[SickPIDServer] Completed");
-            result->success = true;
+        else{
+            pidLoop();
         }
 
         rate.sleep();
     }
-
     goal_handle->succeed(result);
     RCLCPP_INFO(this->get_logger(), "PID goal reached");
 }
@@ -228,6 +242,7 @@ void SickPIDServer::resetVel()
     cmd.linear.y = 0.0f;
     cmd_pub_->publish(cmd);
 }
+
 
 // ---------------- MAIN ----------------
 int main(int argc, char **argv)
